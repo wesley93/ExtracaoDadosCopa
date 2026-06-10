@@ -1,0 +1,75 @@
+name: Pipeline Copa 2026
+
+on:
+  # Execução manual pela aba Actions (botão "Run workflow")
+  workflow_dispatch:
+    inputs:
+      force_scrape:
+        description: "Raspar o FBref mesmo com o banco atualizado"
+        type: boolean
+        default: false
+  # Execução automática diária às 06:00 UTC (03:00 em Brasília)
+  schedule:
+    - cron: "0 6 * * *"
+
+permissions:
+  contents: read
+
+# Evita duas execuções simultâneas brigando pelo mesmo cache de banco
+concurrency:
+  group: pipeline-copa2026
+  cancel-in-progress: false
+
+jobs:
+  prever:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60  # o pacing de 4s/requisição torna o scrape demorado
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      # O runner é efêmero: o banco SQLite sobrevive entre execuções via cache.
+      # restore-keys com prefixo recupera o cache mais recente disponível.
+      - name: Restaurar banco de dados
+        uses: actions/cache/restore@v4
+        with:
+          path: data/copa2026.db
+          key: copa2026-db-${{ github.run_id }}
+          restore-keys: |
+            copa2026-db-
+
+      - name: Executar pipeline (scrape -> treino -> previsões)
+        env:
+          DATABASE_URL: sqlite:///data/copa2026.db
+          CACHE_ENABLED: "false"  # sem cache de HTML no CI: sempre dados frescos
+          LOG_LEVEL: INFO
+        run: |
+          ARGS=""
+          if [ "${{ inputs.force_scrape }}" = "true" ]; then
+            ARGS="--force-scrape"
+          fi
+          python main.py $ARGS | tee previsoes.txt
+
+      - name: Salvar banco de dados
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data/copa2026.db
+          key: copa2026-db-${{ github.run_id }}
+
+      - name: Publicar previsões como artefato
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: previsoes-copa2026
+          path: |
+            previsoes.txt
+            data/copa2026.db
+          retention-days: 30

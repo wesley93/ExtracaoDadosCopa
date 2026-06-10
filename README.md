@@ -66,6 +66,19 @@ BRA vs USA | V 61.2%  E 22.4%  D 16.4% | placar mais provável: 2 x 0 (14.8%)
 
 ## Decisões técnicas
 
+### Fontes de dados e execução em CI
+O FBref responde **HTTP 403 para IPs de datacenter** (Cloudflare), então o
+scraping só funciona de IPs residenciais (sua máquina). Para rodar no GitHub
+Actions, o pipeline tem um fallback automático: ao receber erro do FBref, ele
+ingere o dataset aberto de resultados de seleções
+([martj42/international_results](https://github.com/martj42/international_results),
+CC0) via `raw.githubusercontent.com`, que funciona em qualquer ambiente.
+
+Jogos futuros (o calendário oficial da Copa) são fornecidos em
+`data/fixtures.csv` — copie `data/fixtures.example.csv` e preencha com o
+chaveamento real; os nomes das seleções devem coincidir com os do histórico
+(ex.: `Brazil`, `United States`).
+
 ### Scraper resiliente (`scraper/`)
 - **Tabelas escondidas em comentários**: o FBref serve várias tabelas dentro
   de `<!-- -->` (reidratadas via JS). `parsers.unwrap_html_comments()` remove

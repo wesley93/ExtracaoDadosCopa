@@ -51,6 +51,7 @@ jobs:
           CACHE_ENABLED: "false"  # sem cache de HTML no CI: sempre dados frescos
           LOG_LEVEL: INFO
         run: |
+          set -o pipefail  # sem isso, o `tee` mascara o exit code do python
           ARGS=""
           if [ "${{ inputs.force_scrape }}" = "true" ]; then
             ARGS="--force-scrape"

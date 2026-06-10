@@ -2,7 +2,11 @@
 
 Etapas (cada uma pode ser pulada via flags de linha de comando):
 
-1. **scrape**  — verifica se há dados novos no FBref e atualiza o banco;
+1. **scrape**  — verifica se há dados novos e atualiza o banco. Tenta o
+   FBref primeiro; se ele estiver inacessível (ele responde **403 a IPs de
+   datacenter**, como os runners do GitHub Actions), cai para o dataset
+   aberto de resultados internacionais (``scraper/results_dataset.py``).
+   Jogos futuros podem ser fornecidos em ``data/fixtures.csv``;
 2. **train**   — reconstrói features e treina/atualiza o ``MatchPredictor``;
 3. **predict** — gera previsões para os próximos jogos e as persiste.
 
@@ -16,8 +20,10 @@ Uso::
 from __future__ import annotations
 
 import argparse
+import csv
 import sys
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pandas as pd
 
@@ -29,6 +35,7 @@ from domain.repositories import MatchRepository, PredictionRepository
 from predictor.feature_engine import FeatureEngine
 from predictor.match_predictor import MatchPredictor
 from scraper.fbref_scraper import FBrefScraper
+from scraper.results_dataset import OpenResultsDataset, build_match_id
 from storage.database import Database
 from storage.repositories import (
     SqlMatchRepository,
@@ -49,6 +56,13 @@ DEFAULT_SOURCES: dict[str, str] = {
 # e pulamos o scraping (controle incremental simples).
 STALENESS_THRESHOLD = timedelta(days=1)
 
+# Histórico ingerido do dataset aberto quando o FBref está bloqueado.
+FALLBACK_RESULTS_SINCE_YEAR = 2021
+
+# Jogos futuros fornecidos manualmente (calendário oficial da Copa):
+# CSV com colunas date,home_team,away_team[,neutral].
+LOCAL_FIXTURES_PATH = Path("data/fixtures.csv")
+
 
 class Pipeline:
     """Liga extração, persistência, treino e previsão."""
@@ -68,10 +82,14 @@ class Pipeline:
     # ----------------------------------------------------------- etapa 1
 
     def scrape_if_stale(self, force: bool = False) -> bool:
-        """Atualiza o banco com dados do FBref se houver indício de dados novos.
+        """Atualiza o banco se houver indício de dados novos.
+
+        Tenta o FBref (dados mais ricos: xG, escalações); se ele estiver
+        bloqueado — caso dos runners de CI, que recebem 403 — usa o dataset
+        aberto de resultados internacionais como fonte de histórico.
 
         Returns:
-            ``True`` se houve scraping; ``False`` se o banco estava fresco.
+            ``True`` se houve ingestão; ``False`` se o banco estava fresco.
         """
         latest = self._matches.latest_played_kickoff()
         if not force and latest is not None and datetime.utcnow() - latest < STALENESS_THRESHOLD:
@@ -79,15 +97,72 @@ class Pipeline:
                 "scrape_pulado_banco_fresco",
                 extra={"context": {"latest_played": latest.isoformat()}},
             )
+            self._load_local_fixtures()
             return False
 
-        with FBrefScraper(self._settings.scraper) as scraper:
-            fixtures = scraper.fetch_fixtures(DEFAULT_SOURCES["world_cup_2026_schedule"])
-            self._persist_fixtures(fixtures)
-            # squad/player stats alimentam features avançadas (xG/xA, fadiga):
-            # scraper.fetch_squad_stats(DEFAULT_SOURCES["world_cup_2026_stats"])
-            # scraper.fetch_player_stats(DEFAULT_SOURCES["world_cup_2026_stats"])
+        try:
+            with FBrefScraper(self._settings.scraper) as scraper:
+                fixtures = scraper.fetch_fixtures(DEFAULT_SOURCES["world_cup_2026_schedule"])
+                self._persist_fixtures(fixtures)
+                # squad/player stats alimentam features avançadas (xG/xA, fadiga):
+                # scraper.fetch_squad_stats(DEFAULT_SOURCES["world_cup_2026_stats"])
+                # scraper.fetch_player_stats(DEFAULT_SOURCES["world_cup_2026_stats"])
+        except ScraperError as exc:
+            logger.warning(
+                "fbref_indisponivel_usando_dataset_aberto",
+                extra={"context": {"reason": str(exc)}},
+            )
+            dataset = OpenResultsDataset(self._settings.scraper)
+            played = dataset.fetch_played_matches(since_year=FALLBACK_RESULTS_SINCE_YEAR)
+            affected = self._matches.upsert_many(played)
+            logger.info("historico_persistido", extra={"context": {"matches": affected}})
+
+        self._load_local_fixtures()
         return True
+
+    def _load_local_fixtures(self) -> None:
+        """Carrega jogos futuros de ``data/fixtures.csv``, se o arquivo existir.
+
+        Formato (cabeçalho obrigatório)::
+
+            date,home_team,away_team,neutral
+            2026-06-11,Mexico,Indonesia,false
+
+        Os nomes das seleções devem coincidir com os do histórico ingerido.
+        """
+        if not LOCAL_FIXTURES_PATH.exists():
+            return
+        upcoming: list[Match] = []
+        with LOCAL_FIXTURES_PATH.open(encoding="utf-8") as handle:
+            for row in csv.DictReader(handle):
+                home = (row.get("home_team") or "").strip()
+                away = (row.get("away_team") or "").strip()
+                kickoff = pd.to_datetime(row.get("date"), errors="coerce")
+                if not home or not away or pd.isna(kickoff):
+                    logger.warning("fixture_invalido_ignorado", extra={"context": dict(row)})
+                    continue
+                if kickoff.to_pydatetime() < datetime.utcnow():
+                    # Jogo já ocorreu: o resultado virá das fontes de dados;
+                    # não sobrescrever o registro com status "agendado".
+                    continue
+                neutral = (row.get("neutral") or "true").strip().lower() in {"true", "1", "yes"}
+                upcoming.append(
+                    Match(
+                        match_id=build_match_id(kickoff.to_pydatetime(), home, away),
+                        home_team_code=home,
+                        away_team_code=away,
+                        kickoff=kickoff.to_pydatetime(),
+                        competition="World Cup 2026",
+                        status=MatchStatus.SCHEDULED,
+                        neutral_venue=neutral,
+                    )
+                )
+        if upcoming:
+            self._matches.upsert_many(upcoming)
+            logger.info(
+                "fixtures_locais_carregados",
+                extra={"context": {"path": str(LOCAL_FIXTURES_PATH), "matches": len(upcoming)}},
+            )
 
     def _persist_fixtures(self, fixtures: pd.DataFrame) -> None:
         """Converte o DataFrame do scraper em entidades ``Match`` e persiste."""
@@ -102,7 +177,7 @@ class Pipeline:
             if pd.isna(kickoff):
                 continue
             played = pd.notna(row.get("home_goals")) and pd.notna(row.get("away_goals"))
-            match_id = f"{kickoff.date().isoformat()}_{home}_{away}".replace(" ", "-")
+            match_id = build_match_id(kickoff.to_pydatetime(), home, away)
             matches.append(
                 Match(
                     match_id=match_id,

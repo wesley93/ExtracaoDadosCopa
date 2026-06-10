@@ -38,9 +38,12 @@ class PlayerModel(Base):
 class MatchModel(Base):
     __tablename__ = "matches"
 
-    match_id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    home_team_code: Mapped[str] = mapped_column(ForeignKey("teams.code"), index=True)
-    away_team_code: Mapped[str] = mapped_column(ForeignKey("teams.code"), index=True)
+    # Identificadores de seleção vêm das fontes de dados (nomes completos,
+    # ex.: "United States"), que podem ainda não existir na tabela `teams` —
+    # por isso são colunas livres, sem FK.
+    match_id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    home_team_code: Mapped[str] = mapped_column(String(64), index=True)
+    away_team_code: Mapped[str] = mapped_column(String(64), index=True)
     kickoff: Mapped[datetime] = mapped_column(DateTime, index=True)
     competition: Mapped[str] = mapped_column(String(80))
     status: Mapped[str] = mapped_column(String(16), default="scheduled", index=True)
@@ -54,7 +57,7 @@ class TeamMatchStatsModel(Base):
     __table_args__ = (UniqueConstraint("team_code", "match_id"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    team_code: Mapped[str] = mapped_column(ForeignKey("teams.code"), index=True)
+    team_code: Mapped[str] = mapped_column(String(64), index=True)
     match_id: Mapped[str] = mapped_column(ForeignKey("matches.match_id"), index=True)
     goals_for: Mapped[int] = mapped_column(Integer)
     goals_against: Mapped[int] = mapped_column(Integer)
@@ -86,8 +89,8 @@ class PredictionModel(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     match_id: Mapped[str] = mapped_column(ForeignKey("matches.match_id"), index=True)
-    home_team_code: Mapped[str] = mapped_column(String(3))
-    away_team_code: Mapped[str] = mapped_column(String(3))
+    home_team_code: Mapped[str] = mapped_column(String(64))
+    away_team_code: Mapped[str] = mapped_column(String(64))
     prob_home_win: Mapped[float] = mapped_column(Float)
     prob_draw: Mapped[float] = mapped_column(Float)
     prob_away_win: Mapped[float] = mapped_column(Float)

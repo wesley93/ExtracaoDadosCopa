@@ -1,0 +1,32 @@
+[project]
+name = "copa2026-predictor"
+version = "0.1.0"
+description = "Pipeline de extração (FBref) e previsão de resultados da Copa do Mundo de 2026"
+requires-python = ">=3.11"
+dependencies = [
+    "requests>=2.32",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.2",
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "scipy>=1.13",
+    "statsmodels>=0.14",
+    "SQLAlchemy>=2.0",
+]
+
+[project.optional-dependencies]
+ml = ["xgboost>=2.0", "scikit-learn>=1.5"]
+mssql = ["pyodbc>=5.1"]
+dev = ["pytest>=8.0", "mypy>=1.10", "ruff>=0.4"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

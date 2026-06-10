@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Ambiente e segredos
+.env
+
+# Dados locais (cache de HTML, banco SQLite, modelos treinados)
+data/cache/*.html
+data/*.db
+data/*.sqlite3
+models/*.pkl
+models/*.joblib
+
+# Ferramentas
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# IDEs
+.idea/
+.vscode/
